@@ -1,124 +1,106 @@
-var nodemailer = require('nodemailer');
-var request = require('request');
-var querystring = require('querystring');
+// The Cloud Functions for Firebase SDK to create Cloud Functions and triggers.
+const dotenv = require('dotenv').config();
+const functions = require('firebase-functions');
+const nodemailer = require('nodemailer');
 
-var CONFIG = {
-    SMTP_USERNAME: process.env.SMTP_USERNAME || '606cb7cdb9688f',
-    SMTP_PASSWORD: process.env.SMTP_PASSWORD || '9f6ac223da8b4d',
-    SMTP_HOST: process.env.SMTP_HOST || 'sandbox.smtp.mailtrap.io',
-    SMTP_PORT: parseInt(process.env.SMTP_PORT) || 2525,
-    SMTP_FROM_NAME: process.env.SMTP_FROM_NAME || 'linally.com',
-    SMTP_FROM_EMAIL: process.env.SMTP_FROM_EMAIL || 'no-reply@linally.com',
-    SMTP_FROM_SUBJECT: process.env.SMTP_FROM_SUBJECT || 'Contact form submitted on linally.com',
-    SMTP_TO: process.env.SMTP_TO || 'app@linally.com,tonny.m@linally.com',
-    RECAPTCHA_SECRET_KEY: process.env.RECAPTCHA_SECRET_KEY || '',
-    REQUIRED_FIELDS: process.env.REQUIRED_FIELDS || 'name,email',
-    SUCCESS_MESSAGE: process.env.SUCCESS_MESSAGE || 'Thank you, We have received your message'
-}
 
-function sendEmail(formData, res){
+dotenv.config();
+// The Firebase Admin SDK to access Firestore.
+const {initializeApp} = require("firebase-admin/app");
 
-    var smtpConfig = {
-        host: CONFIG.SMTP_HOST,
-        port: CONFIG.SMTP_PORT,
-        auth: {
-            user: CONFIG.SMTP_USERNAME,
-            pass: CONFIG.SMTP_PASSWORD
-        }
-    }
-    
-    var transporter = nodemailer.createTransport(smtpConfig);
+const form = document.getElementById('contactForm');
+const alert = document.querySelector('.alert');
 
-    var subject = CONFIG.SMTP_FROM_SUBJECT;
-    
-    if(formData['subject'] !== undefined ){
-        subject = formData['subject'];
-    }
 
-    var mailBody = '';
-    for (var key in formData) {
-        if (formData.hasOwnProperty(key)) { 
-            if(key === 'g-recaptcha-response' || key === 'submit')
-            continue;
-            mailBody += `<strong>${key} :</strong> ${formData[key]} <br />`;
-        }
+const firebaseConfig = {
+    apiKey: process.env.apiKey,
+    authDomain: process.env.authDomain,
+    databaseURL: process.env.databaseURL,
+    projectId: process.env.projectId,
+    storageBucket: process.env.storageBucket,
+    messagingSenderId: process.env.messagingSenderId,
+    appId: process.env.appId,
+    measurementId: process.env.measurementId
+  };
+
+  // Initialize Firebase
+  firebase.initializeApp(firebaseConfig);
+  initializeApp();
+
+  const database = firebase.database();
+  
+  const ref = database.ref('contacts');
+  
+  form.addEventListener('submit', (e) =>{
+      e.preventDefault();
+  
+      const testerName = document.getElementById('testerName').value;
+      const testerEmail = document.getElementById('testerEmail').value;
+  
+      ref.push({
+          name: testerName,
+          email: testerEmail
+      })
+
+
+      
+      alert.style.display = 'block';
+  
+      setTimeout(() =>{
+          alert.style.display = 'none';
+      }, 2000);
+  
+      form.reset();
+
+      //Creating Nodemailer transporter using your Mailtrap SMTP details
+      let transporter = nodemailer.createTransport({
+        host: process.env.host,
+      port: process.env.port,
+      auth: {
+        user: process.env.user,
+        pass: process.env.pass
       }
-    
-    transporter.sendMail({
-        from: '"' + CONFIG.SMTP_FROM_NAME + '" <' + CONFIG.SMTP_FROM_EMAIL + '>', // sender address
-        to: CONFIG.SMTP_TO,
-        subject: subject,
-        html: mailBody
-    }, (error, info) => {
+      });
+
+      exports.sendEmail = functions.region('europe-west1').https.onRequest(async (req, res) => {
+      const { MailtrapClient } = require("mailtrap");
+
+      const TOKEN = process.env.tokens;
+      const ENDPOINT = process.env.endpoints;
+
+      const client = new MailtrapClient({ endpoint: ENDPOINT, token: TOKEN });
+
+      const mailLink = process.env.mailLink;
+      const callLink = process.env.callLink;
+      const sendLink = process.env.sendLink;
+
+
+
+      const sender = {
+        email: process.env.email,
+        name: process.env.name,
+      };
+      const recipients = [
+        {
+          email: testerEmail
+        }
+      ];
+
+      client
+        .send({
+          from: sender,
+          to: recipients,
+          template_uuid: process.env.template_uuid,
+          template_variables: {
+            "user_name": testerName,
+            "next_step_link": sendLink,
+            "call_link": callLink,
+            "mail_link": mailLink
+          }
+        })
+        .then(console.log, console.error);
+
+      });
         
-        if (error) {
-            return res.status(500).send(JSON.stringify({
-                success: false,
-                message: 'Email failed. Please Try Again.'
-            }))
-        }
-        return res.status(200).send(JSON.stringify({
-            success: true,
-            message: CONFIG.SUCCESS_MESSAGE
-        }))
-    });
-}
-
-function reCaptcha(formData, res) {
-
-    var verificationUrl = 'https://www.google.com/recaptcha/api/siteverify?';
-
-    verificationUrl += querystring.stringify({
-        'secret': CONFIG.RECAPTCHA_SECRET_KEY,
-        'response': formData['g-recaptcha-response']
-    });
-
-    if (formData['g-recaptcha-response'] === undefined || formData['g-recaptcha-response'] === '' || formData['g-recaptcha-response'] === null) {
-        return res.status(200).send(JSON.stringify({
-            success: false,
-            message: 'Please select captcha'
-        }));
-    }
-    
-    request(verificationUrl, function (error, response, body) {
-
-        body = JSON.parse(body);
-        
-        // Success will be true or false depending upon captcha validation.
-        if (body.success !== undefined && !body.success) {
-            return res.status(200).send(JSON.stringify({
-                success: false,
-                message: 'Invalid captcha. Please try again'
-            }));
-        }
-        sendEmail(formData, res);
-    });
-}
-
-exports.onSubmit = (req, res) => {
-    
-    res.set('Access-Control-Allow-Origin', '*');
-    res.set('Access-Control-Allow-Methods', 'POST');
-    res.set('Access-Control-Allow-Headers', 'Content-Type');
-
-    var formData = req.body;
-    
-    var requiredFields = CONFIG.REQUIRED_FIELDS.split(',');
-    
-    for (var i = 0; i < requiredFields.length; i++) {
-        if(formData[requiredFields[i].trim()] == ''){
-            res.send(JSON.stringify({
-                success: false,
-                message: `${requiredFields[i].trim()} field is required`
-            }));
-            res.status(200).end();
-            return;
-        }
-    }
-
-    if (CONFIG.RECAPTCHA_SECRET_KEY) {
-        reCaptcha(formData, res);
-    } else {
-        sendEmail(formData, res);
-    }
-};
+  
+  })
